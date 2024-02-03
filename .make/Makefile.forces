@@ -1,0 +1,469 @@
+####################################################################################################
+#### Makefile forces (fith force of nature for lazy people)
+####################################################################################################
+#### Updates (ifany): https://github.com/ralf-it/makefile-forces.git
+####
+#### Setup:
+####	1. Place this file as ./make/Makefile.forces
+####	2. Add to your Makefile by: `include ./make/Makefile.forces`
+####	3. Update by: `$(M) update-makefile-forces
+#### FAQ:
+####	+= append to variable
+####	 = is regular assignment, dynamically evaluated when used
+####	:= is immediate assignment (evaluated at declaration)
+####	?= If the variable is not defined, set it to this value similar to :=
+####
+#### ! NOTE: non-internal targets must be commented with "## ...description..." else they are doomed
+####################################################################################################
+
+####################################################################################################
+#### Configs
+####################################################################################################
+
+#===================================================================================================
+#=== Debugging and logging
+#===================================================================================================
+TRACE         ?= false
+DEBUG         ?= false
+VERBOSE       ?= false
+
+ifeq ($(TRACE),true)
+  TF_LOG    := TRACE
+else ifeq ($(DEBUG),true)
+  TF_LOG    := DEBUG
+else ifeq ($(VERBOSE),true)
+  TF_LOG    := INFO
+endif
+
+ifeq  ($(filter true, $(TRACE) $(DEBUG) $(VERBOSE)),)
+  .SILENT:
+  SILENT := true
+else
+  SILENT := false
+endif
+
+#===================================================================================================
+#=== Makefile Flags
+#===================================================================================================
+M             ?= gmake
+
+# do not print the current directory
+# force to run without caching targets
+# disable built-in rules (e.g. %.o: %.c)
+# warn if an undefined variable is referenced
+MAKEFLAGS     += --no-print-directory
+MAKEFLAGS     += --always-make
+MAKEFLAGS     += --no-builtin-rules
+MAKEFLAGS     += --warn-undefined-variables
+
+# 0: disabled, -1: all-cores, n: number of jobs
+PARALLEL      ?= 0
+
+ifneq ($(PARALLEL),0) # if PARALLEL is not disabled
+  ifeq ($(PARALLEL),-1) # if PARALLEL is set to cores-number
+    MAKEFLAGS     += -j $(CPUS) -l $(CPUS)
+  else                  # if PARALLEL is set to a specific value
+    MAKEFLAGS     += -j $(PARALLEL) -l $(PARALLEL)
+  endif
+else                 # if PARALLEL is disabled
+   MAKEFLAGS     += -j 1 -l 1
+endif
+
+#===================================================================================================
+#=== Shell
+#===================================================================================================
+
+.ONESHELL:    # multiline targets
+.SHELL        := $(shell which bash) -euo pipefail --login
+SHELL         := $(shell which bash)
+SHELL_NAME    := $(notdir ${SHELL})
+SHELL_VERSION := $(shell echo $${BASH_VERSION%%[^0-9.]*})
+TERM          ?= xterm
+
+
+ifneq ($(DEBUG),true)
+   # -e: exit on error
+   # -u: error on undefined variable
+   # -o pipefail: catch pipe errors
+   # -c: run in non-interactive mode
+  .SHELLFLAGS	:= -eu -o pipefail -c
+else
+   # -x: print command before execution
+  .SHELLFLAGS	:= -xeu -o pipefail -c
+endif
+
+
+####################################################################################################
+#### System Checks
+####################################################################################################
+CPUS          ?= $(shell nproc)
+DATE          ?= $(shell date)
+MY_IP         ?= $(shell curl -ss "http://ipv4.icanhazip.com" | tr -d [:space:])
+MY_IP_CIDR    ?= $(MY_IP)/32
+
+#===================================================================================================
+#=== Os Check
+#===================================================================================================
+ifndef OS
+  OS := $(shell uname -s)
+else ifneq ($(OS),Windows_NT)
+  OS := $(shell uname -s)
+else ifeq ($(OS),Windows_NT)
+  $(error Windows is not supported. Scram!)
+endif
+
+#===================================================================================================
+#=== Make Check
+#===================================================================================================
+ifeq ($(shell expr $(MAKE_VERSION) \< 4.3), 1)
+    $(error Using not supported Make $(MAKE_VERSION))
+else ifeq ($(SILENT),false)
+    $(info Using Make $(MAKE_VERSION))
+endif
+
+#===================================================================================================
+#=== Bash Check
+#===================================================================================================
+ifeq ($(shell expr $(SHELL_VERSION) \< 5.1), 1)
+    $(error Using not supported Bash $(SHELL_VERSION))
+else ifeq ($(SILENT),false)
+    $(info Using Bash $(SHELL_VERSION))
+endif
+
+####################################################################################################
+#### ENV VARS
+####################################################################################################
+# ! TODO do we want to EXPORT all variables?
+.EXPORT_ALL_VARIABLES:
+
+-include .env.forces
+
+
+####################################################################################################
+#### HACKS
+####################################################################################################
+
+MAKEFILE_LIST_UNIQ = `echo $(MAKEFILE_LIST)  | tr ' ' '\n' |  sort | uniq`
+
+
+# If command line input is defined (i.e. `$(M) INFO aladef -- --ala --ma --kota`)
+ifdef MAKECMDGOALS
+  ifndef ARGV
+    ARGV = $(filter-out $@,$(filter-out --,$(MAKECMDGOALS)))
+  endif
+## ! Catch undefined targets when doing `$(M) INFO ala ma kota`
+## ! Note: use `$(M) INFO -- --ala --ma --kota` to pass arguments to target
+## ! when `--warn-undefined-variables` and `ARGV` are used
+## !
+%:
+	@:
+## ! .......................................................................
+else
+  ARGV ?=
+endif
+
+
+####################################################################################################
+#### TARGETS
+####################################################################################################
+
+#===================================================================================================
+#=== UTILS
+#===================================================================================================
+
+TMP_DIR       := ./.tmp
+GEN_TEMP_FILE  = $(shell mktemp)
+COWSAY         = $(shell which cowsay || echo /usr/games/cowsay)
+DATETIME      := $(shell date +%Y%m%dT%H%M%S)
+
+clear: ##
+	clear
+
+show-env: ## [HELPER] show environment variables
+	$(M) $@+INFO
+	env | sort
+
+#===================================================================================================
+#=== SELF UPDATE
+#===================================================================================================
+
+MAKEFILE_LIST_UNIQ = `echo $(MAKEFILE_LIST)  | tr ' ' '\n' |  sort | uniq`
+
+MAKEFILE_FORCES ?= .make/Makefile.forces
+MAKEFILE_FORCES_URL ?= https://raw.githubusercontent.com/ralf-it/makefile-forces/main/.make/Makefile.forces
+
+makefile-list: ## [COMMON] Show list of loaded Makefiles and .env's
+	echo $(MAKEFILE_LIST_UNIQ)
+
+update-makefile-forces: ## [HELPER] update makefile-forces to latest version from github
+	$(M) $@+INFO-B
+	set +x
+
+	TMP_MAKEFILE_FORCES=$(GEN_TEMP_FILE)
+
+	$(M) $@+INFO -- Downloading latest version
+	curl -s $(MAKEFILE_FORCES_URL) > $$TMP_MAKEFILE_FORCES
+
+	if [ ! -f $$TMP_MAKEFILE_FORCES ]; then
+		$(M) $@+ERROR -- Failed to download $(MAKEFILE_FORCES_URL)
+	fi
+
+	if ! cmp -s $(MAKEFILE_FORCES) $$TMP_MAKEFILE_FORCES; then
+		$(M) $@+INFO -- Backuping $(MAKEFILE_FORCES) to $(MAKEFILE_FORCES).$(DATETIME)
+		cp $(MAKEFILE_FORCES) $(MAKEFILE_FORCES).$(DATETIME)
+		cat $$TMP_MAKEFILE_FORCES > $(MAKEFILE_FORCES)
+	else
+		$(M) $@+INFO -- No update needed for $(MAKEFILE_FORCES)
+	fi
+
+	$(M) $@+INFO-E
+
+
+#===================================================================================================
+#== DOCKER
+#===================================================================================================
+D                     =? docker
+D_PRUNE_NET           = $(D) network prune --force
+D_PRUNE               =	$(D) system prune --volumes --force
+D_PURGE               = $(D) system prune --all --volumes --force
+
+docker-purge: ## [HELPER] purge all docker resources
+	$(M) $@+INFO
+	$(D_PURGE)
+
+docker-prune: ## [HELPER] Prune dandling resources
+	$(M) $@+INFO
+	set -x
+	$(D_PRUNE)
+
+docker-prune-net: ## [HELPER] Prune networks
+	$(M) $@+INFO
+	set -x
+	$(D_PRUNE_NET)
+
+#===================================================================================================
+#== Install tools
+#===================================================================================================
+
+install-tools: install-nmap install-tfenv ##
+
+install-nmap: ##
+	sudo apt-get install -y nmap
+
+install-tfenv: ##
+	git clone --depth=1 https://github.com/tfutils/tfenv.git --single-branch --branch v3.0.0 ~/.tfenv
+
+install-lsof: ##
+	sudo apt install lsof -yy
+
+install-netcat: ##
+	sudo apt install netcat-openbsd -yy
+
+#===================================================================================================
+#== NET
+#===================================================================================================
+
+show-used-ports: ## [HELPER] show used ports
+	$(M) $@+INFO
+	sudo lsof -i -P -n | grep LISTEN
+
+#===================================================================================================
+#== Terraform
+#===================================================================================================
+
+tf-fmt: ##
+	cd terraform || true
+	terraform fmt -recursive
+
+#===================================================================================================
+#== AZURE
+#===================================================================================================
+
+az-login: ##
+	az login
+
+dev-az-set-sub: ##
+	echo "Setting subscription to AZ_SUBSCRIPTION_DEV_ID"
+	az account set --subscription $(AZ_SUBSCRIPTION_DEV_ID)
+
+qa-az-set-sub: ##
+	echo "Setting subscription to AZ_SUBSCRIPTION_QA_ID"
+	az account set --subscription $(AZ_SUBSCRIPTION_QA_ID)
+
+stag-az-set-sub: ##
+	echo "Setting subscription to AZ_SUBSCRIPTION_STAG_ID"
+	az account set --subscription $(AZ_SUBSCRIPTION_STAG_ID)
+
+prod-az-set-sub: ##
+	echo "Setting subscription to AZ_SUBSCRIPTION_PROD_ID"
+	az account set --subscription $(AZ_SUBSCRIPTION_PROD_ID)
+
+#===================================================================================================
+#=== GIT
+#===================================================================================================
+
+GIT_DATE           ?= $(shell date)
+
+gaa:
+	git add --all
+
+gcae:
+  ifdef GIT_AUTHOR
+	git commit --amend --no-edit --author="$(GIT_AUTHOR)" --date="$(GIT_DATE)"
+  else
+	git commit --amend --no-edit --date="$(GIT_DATE)"
+  endif
+
+gca:
+  ifdef GIT_AUTHOR
+	git commit --amend --author="$(GIT_AUTHOR)" --date="$(GIT_DATE)"
+  else
+	git commit --amend --date="$(GIT_DATE)"
+  endif
+
+gp:
+	git push
+
+gpf:
+	git push --force --force-with-lease
+
+gf:
+	git fetch
+
+GACF:
+	$(M) gaa
+	$(M) gcae
+	$(M) gpf
+
+#===================================================================================================
+#== HELP
+#===================================================================================================
+
+# Set the default target
+.DEFAULT_GOAL := help
+.PHONY: help
+
+# HELP
+# This will output the help for each task
+# thanks to https://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
+help: ## [MAKEFILE] This help.
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_0-9-]+:.*?## / {printf "$(COLOR_CYAN)%-40s$(END_COLOUR) %s\n", $$1":", $$2}' $(MAKEFILE_LIST_UNIQ) | sort -k 2
+help-no-color: ## [MAKEFILE] This help (no color).
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_0-9-]+:.*?## / {printf "%-40s %s\n", $$1":", $$2}' $(MAKEFILE_LIST_UNIQ) | sort
+
+#===================================================================================================
+#== Logging
+#===================================================================================================
+
+COLOUR_GREEN     = \033[0;32m
+COLOUR_BLUE      = \033[0;34m
+COLOR_CYAN       = \033[0;36m
+COLOUR_ORANGE    = \033[0;33m
+COLOUR_RED       = \033[0;31m
+END_COLOUR       = \033[0m
+LINE_CHAR       ?= =
+COLUMNS         ?= $(shell tput cols)
+MSG              =
+
+.line:
+	printf -- '$(LINE_CHAR)%.0s' {1..$(COLUMNS)}; echo
+
+INFO-B: ##
+	$(M) $@+INFO-B
+
+INFO-E: ##
+	$(M) $@+INFO-E
+
+INFO: ##
+	$(M) $@+INFO
+
+WARN: ##
+	$(M) $@+WARN
+
+ERROR: ##
+	$(M) $@+ERROR
+
+%+INFO-B:
+	export TARGET=$*
+	set +x
+
+	MSG="$(MSG)$(filter-out $@,$(ARGV))"
+	if [ "$$MSG" == "" ];
+	then
+		HELP=`$(M) help-no-color | grep "$$TARGET:" | cut -d ' ' -f 2- | awk '{$$1=$$1};1'`
+		MSG="$$HELP"
+	fi
+
+	echo -en "" "$(COLOUR_GREEN)\r"
+	$(M) .line
+	if [ "$$TARGET" == "INFO" ];
+	then
+		echo -e "[$(DATE)] INFO BEGIN - $${MSG}..."
+	else
+		echo -e "[$(DATE)] INFO BEGIN - $${TARGET^^} - $${MSG}..."
+	fi
+	$(M) .line LINE_CHAR='-'
+	echo -en "" "$(END_COLOUR)\r"
+	echo
+
+%+INFO-E:
+	export TARGET=$*
+	set +x
+	MSG="$(MSG)$(filter-out $@,$(ARGV))"
+	if [ "$$MSG" == "" ];
+	then
+		HELP=`$(M) help-no-color | grep "$$TARGET:" | cut -d ' ' -f 2- | awk '{$$1=$$1};1'`
+		MSG="$$HELP"
+	fi
+
+	echo
+	echo -en "" "$(COLOUR_GREEN)\r"
+	$(M) .line LINE_CHAR='-'
+	if [ "$$TARGET" == "INFO" ];
+	then
+		echo -e "[$(DATE)] INFO END - $${MSG}..."
+	else
+		echo -e "[$(DATE)] INFO END - $${TARGET^^} - $${MSG}..."
+	fi
+	$(M) .line
+	echo -e "$(END_COLOUR)"
+
+%+INFO:
+	export TARGET=$*
+	set +x
+	MSG="$(MSG)$(filter-out $@,$(ARGV))"
+	if [ "$$MSG" == "" ];
+	then
+		HELP=`$(M) help-no-color | grep "$$TARGET:" | cut -d ' ' -f 2- | awk '{$$1=$$1};1'`
+		MSG="$$HELP"
+	fi
+
+	if [ "$$TARGET" == "INFO" ];
+	then
+		echo -e "$(COLOUR_GREEN)[$(DATE)] INFO - $${MSG}...$(END_COLOUR)"
+	else
+		echo -e "$(COLOUR_GREEN)[$(DATE)] INFO - $${TARGET^^} - $${MSG}...$(END_COLOUR)"
+	fi
+
+%+WARN:
+	export TARGET=$*
+	set +x
+	MSG="$(MSG)$(filter-out $@,$(ARGV))"
+	if [ "$$TARGET" == "WARN" ];
+	then
+		echo -e "$(COLOUR_ORANGE)[$(DATE)] WARN - $${MSG}...$(END_COLOUR)"
+	else
+		echo -e "$(COLOUR_ORANGE)[$(DATE)] WARN - $${TARGET^^} - $${MSG}...$(END_COLOUR)"
+	fi
+
+%+ERROR:
+	export TARGET=$*
+	set +x
+	MSG="$(MSG)$(filter-out $@,$(ARGV))"
+	if [ "$$TARGET" == "WARN" ];
+	then
+		echo -e "$(COLOUR_RED)[$(DATE)] ERROR - $${MSG}...$(END_COLOUR)"
+	else
+		echo -e "$(COLOUR_RED)[$(DATE)] ERROR -  $${TARGET^^} - $${MSG}...$(END_COLOUR)"
+	fi
+	exit 1

@@ -1,0 +1,52 @@
+name: volumes
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  deployment:
+    timeout-minutes: 2
+    runs-on: ubuntu-latest
+
+    container:
+      image: alpine
+      env:
+        LOCALENV_HOME: ${{ github.workspace }}
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock
+
+    steps:
+      # Checkout project code
+      # Use sparse checkout to only select files in mobile app directory
+      # Turning off cone mode ensures that files in the project root are not included during checkout
+      - uses: actions/checkout@v4
+        # with:
+          # sparse-checkout: '.devcontainer_user/'
+          # path: '/opt/devcontainer_user' # ! wont work outside workspace
+          # sparse-checkout-cone-mode: false
+      - name: Restart NGINX # ! Restart NGINX after volumes have been checked out
+        uses: docker://docker
+        with:
+          args: docker restart nginx
+      - name: show3
+        run: find .
+      - name: connectNginx
+        run: |
+          apk add curl
+          set -x
+          while true; do
+            curl nginx:80/files/ || true
+            curl nginx:80/files/devcontainer_user/ && exit 0 || true
+            sleep 3
+          done
+
+    services: # [Workflow syntax for GitHub Actions - GitHub Docs](https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idservices)
+      nginx:
+        image: nginx
+        # Map port 8080 on the Docker host to port 80 on the nginx container
+        ports:
+          - 80:80
+        volumes:
+          - ${{ github.workspace }}/.nginx/conf.d:/etc/nginx/conf.d
+          - ${{ github.workspace }}/.devcontainer_user:/opt/devcontainer_user
+        options: --name nginx
